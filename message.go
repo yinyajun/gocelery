@@ -8,11 +8,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log"
-	"reflect"
 	"sync"
 	"time"
 
-	uuid "github.com/satori/go.uuid"
+	"github.com/satori/go.uuid"
 )
 
 // CeleryMessage is actual message to be sent to Redis
@@ -35,8 +34,10 @@ func (cm *CeleryMessage) reset() {
 var celeryMessagePool = sync.Pool{
 	New: func() interface{} {
 		return &CeleryMessage{
-			Body:        "",
-			Headers:     nil,
+			Body: "",
+			Headers: map[string]interface{}{
+				"lang": "go",
+			},
 			ContentType: "application/json",
 			Properties: CeleryProperties{
 				BodyEncoding:  "base64",
@@ -68,6 +69,8 @@ func releaseCeleryMessage(v *CeleryMessage) {
 
 // CeleryProperties represents properties json
 type CeleryProperties struct {
+	Priority      int                `json:"priority"`
+	Expiration    string             `json:"expiration"`
 	BodyEncoding  string             `json:"body_encoding"`
 	CorrelationID string             `json:"correlation_id"`
 	ReplyTo       string             `json:"reply_to"`
@@ -187,35 +190,4 @@ type ResultMessage struct {
 	Traceback interface{}   `json:"traceback"`
 	Result    interface{}   `json:"result"`
 	Children  []interface{} `json:"children"`
-}
-
-func (rm *ResultMessage) reset() {
-	rm.Result = nil
-}
-
-var resultMessagePool = sync.Pool{
-	New: func() interface{} {
-		return &ResultMessage{
-			Status:    "SUCCESS",
-			Traceback: nil,
-			Children:  nil,
-		}
-	},
-}
-
-func getResultMessage(val interface{}) *ResultMessage {
-	msg := resultMessagePool.Get().(*ResultMessage)
-	msg.Result = val
-	return msg
-}
-
-func getReflectionResultMessage(val *reflect.Value) *ResultMessage {
-	msg := resultMessagePool.Get().(*ResultMessage)
-	msg.Result = GetRealValue(val)
-	return msg
-}
-
-func releaseResultMessage(v *ResultMessage) {
-	v.reset()
-	resultMessagePool.Put(v)
 }

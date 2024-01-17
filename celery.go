@@ -5,7 +5,6 @@
 package gocelery
 
 import (
-	"context"
 	"fmt"
 	"time"
 )
@@ -14,53 +13,25 @@ import (
 type CeleryClient struct {
 	broker  CeleryBroker
 	backend CeleryBackend
-	worker  *CeleryWorker
 }
 
 // CeleryBroker is interface for celery broker database
 type CeleryBroker interface {
 	SendCeleryMessage(*CeleryMessage) error
-	GetTaskMessage() (*TaskMessage, error) // must be non-blocking
 }
 
 // CeleryBackend is interface for celery backend database
 type CeleryBackend interface {
-	GetResult(string) (*ResultMessage, error) // must be non-blocking
-	SetResult(taskID string, result *ResultMessage) error
+	GetResult(string) (*ResultMessage, error)
+	WaitForResult(string, time.Duration) (*ResultMessage, error)
 }
 
 // NewCeleryClient creates new celery client
-func NewCeleryClient(broker CeleryBroker, backend CeleryBackend, numWorkers int) (*CeleryClient, error) {
+func NewCeleryClient(broker CeleryBroker, backend CeleryBackend) (*CeleryClient, error) {
 	return &CeleryClient{
 		broker,
 		backend,
-		NewCeleryWorker(broker, backend, numWorkers),
 	}, nil
-}
-
-// Register task
-func (cc *CeleryClient) Register(name string, task interface{}) {
-	cc.worker.Register(name, task)
-}
-
-// StartWorkerWithContext starts celery workers with given parent context
-func (cc *CeleryClient) StartWorkerWithContext(ctx context.Context) {
-	cc.worker.StartWorkerWithContext(ctx)
-}
-
-// StartWorker starts celery workers
-func (cc *CeleryClient) StartWorker() {
-	cc.worker.StartWorker()
-}
-
-// StopWorker stops celery workers
-func (cc *CeleryClient) StopWorker() {
-	cc.worker.StopWorker()
-}
-
-// WaitForStopWorker waits for celery workers to terminate
-func (cc *CeleryClient) WaitForStopWorker() {
-	cc.worker.StopWait()
 }
 
 // Delay gets asynchronous result
@@ -115,24 +86,22 @@ type AsyncResult struct {
 	result  *ResultMessage
 }
 
-// Get gets actual result from backend
-// It blocks for period of time set by timeout and returns error if unavailable
 func (ar *AsyncResult) Get(timeout time.Duration) (interface{}, error) {
-	ticker := time.NewTicker(50 * time.Millisecond)
-	timeoutChan := time.After(timeout)
-	for {
-		select {
-		case <-timeoutChan:
-			err := fmt.Errorf("%v timeout getting result for %s", timeout, ar.TaskID)
-			return nil, err
-		case <-ticker.C:
-			val, err := ar.AsyncGet()
-			if err != nil {
-				continue
-			}
-			return val, nil
-		}
+	if ar.result != nil {
+		return ar.result.Result, nil
 	}
+	val, err := ar.backend.WaitForResult(ar.TaskID, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, err
+	}
+	if val.Status != "SUCCESS" {
+		return nil, fmt.Errorf("error response status %v", val)
+	}
+	ar.result = val
+	return val.Result, nil
 }
 
 // AsyncGet gets actual result from backend and returns nil if not available
@@ -164,5 +133,5 @@ func (ar *AsyncResult) Ready() (bool, error) {
 		return false, err
 	}
 	ar.result = val
-	return (val != nil), nil
+	return val != nil, nil
 }

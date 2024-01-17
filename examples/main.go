@@ -1,52 +1,48 @@
-// Copyright (c) 2019 Sick Yoon
-// This file is part of gocelery which is released under MIT license.
-// See file LICENSE for full license details.
-
 package main
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
 	"reflect"
 	"time"
 
-	"github.com/gocelery/gocelery"
 	"github.com/gomodule/redigo/redis"
+	"github.com/yinyajun/gocelery"
 )
 
 // Run Celery Worker First!
-// celery -A worker worker --loglevel=debug --without-heartbeat --without-mingle
+// celery -A app worker -l debug -Q q1 --without-heartbeat --without-mingle
 func main() {
 
 	// create redis connection pool
 	redisPool := &redis.Pool{
-		MaxIdle:     3,                 // maximum number of idle connections in the pool
-		MaxActive:   0,                 // maximum number of connections allocated by the pool at a given time
+		MaxIdle:     32,                // maximum number of idle connections in the pool
+		MaxActive:   64,                // maximum number of connections allocated by the pool at a given time
 		IdleTimeout: 240 * time.Second, // close connections after remaining idle for this duration
 		Dial: func() (redis.Conn, error) {
-			c, err := redis.DialURL("redis://")
+			c, err := redis.DialURL("redis://localhost:6379/0")
 			if err != nil {
 				return nil, err
 			}
 			return c, err
 		},
-		TestOnBorrow: func(c redis.Conn, t time.Time) error {
-			_, err := c.Do("PING")
-			return err
-		},
 	}
 
 	// initialize celery client
+	broker := gocelery.NewRedisBroker(redisPool)
+	backend := gocelery.NewRedisBackend(redisPool)
+	broker.QueueName = "q1"
 	cli, _ := gocelery.NewCeleryClient(
-		gocelery.NewRedisBroker(redisPool),
-		&gocelery.RedisCeleryBackend{Pool: redisPool},
-		1,
+		broker,
+		backend,
 	)
 
 	// prepare arguments
-	taskName := "worker.add"
+	taskName := "sd.tasks.add"
 	argA := rand.Intn(10)
 	argB := rand.Intn(10)
+	fmt.Println(argA, argB)
 
 	// run task
 	asyncResult, err := cli.Delay(taskName, argA, argB)
@@ -55,11 +51,10 @@ func main() {
 	}
 
 	// get results from backend with timeout
-	res, err := asyncResult.Get(10 * time.Second)
+	res, err := asyncResult.Get(31 * time.Second)
 	if err != nil {
 		panic(err)
 	}
 
 	log.Printf("result: %+v of type %+v", res, reflect.TypeOf(res))
-
 }

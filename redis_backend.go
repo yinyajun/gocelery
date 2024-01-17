@@ -7,6 +7,7 @@ package gocelery
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/gomodule/redigo/redis"
 )
@@ -21,16 +22,6 @@ type RedisCeleryBackend struct {
 func NewRedisBackend(conn *redis.Pool) *RedisCeleryBackend {
 	return &RedisCeleryBackend{
 		Pool: conn,
-	}
-}
-
-// NewRedisCeleryBackend creates new RedisCeleryBackend
-//
-// Deprecated: NewRedisCeleryBackend exists for historical compatibility
-// and should not be used. Pool should be initialized outside of gocelery package.
-func NewRedisCeleryBackend(uri string) *RedisCeleryBackend {
-	return &RedisCeleryBackend{
-		Pool: NewRedisPool(uri),
 	}
 }
 
@@ -53,14 +44,25 @@ func (cb *RedisCeleryBackend) GetResult(taskID string) (*ResultMessage, error) {
 	return &resultMessage, nil
 }
 
-// SetResult pushes result back into redis backend
-func (cb *RedisCeleryBackend) SetResult(taskID string, result *ResultMessage) error {
-	resBytes, err := json.Marshal(result)
-	if err != nil {
-		return err
-	}
+func (cb *RedisCeleryBackend) WaitForResult(taskID string, timeout time.Duration) (*ResultMessage, error) {
 	conn := cb.Get()
 	defer conn.Close()
-	_, err = conn.Do("SETEX", fmt.Sprintf("celery-task-meta-%s", taskID), 86400, resBytes)
-	return err
+
+	c := redis.PubSubConn{Conn: conn}
+	c.Subscribe(fmt.Sprintf("celery-task-meta-%s", taskID))
+
+	for {
+		val := c.ReceiveWithTimeout(timeout)
+		switch val.(type) {
+		case error:
+			return nil, val.(error)
+		case redis.Message:
+			msg := val.(redis.Message)
+			var resultMessage ResultMessage
+			if err := json.Unmarshal(msg.Data, &resultMessage); err != nil {
+				return nil, err
+			}
+			return &resultMessage, nil
+		}
+	}
 }
