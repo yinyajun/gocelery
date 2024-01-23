@@ -34,34 +34,33 @@ func NewCeleryClient(broker CeleryBroker, backend CeleryBackend) (*CeleryClient,
 	}, nil
 }
 
-// Delay gets asynchronous result
-func (cc *CeleryClient) Delay(task string, args ...interface{}) (*AsyncResult, error) {
+func (cc *CeleryClient) ApplyAsync(task string,
+	args []interface{},
+	options ...Option,
+) (*AsyncResult, error) {
 	celeryTask := getTaskMessage(task)
-	celeryTask.Args = args
-	return cc.delay(celeryTask)
-}
+	defer releaseTaskMessage(celeryTask)
+	celeryMessage := getCeleryMessage()
+	defer releaseCeleryMessage(celeryMessage)
 
-// DelayKwargs gets asynchronous results with argument map
-func (cc *CeleryClient) DelayKwargs(task string, args map[string]interface{}) (*AsyncResult, error) {
-	celeryTask := getTaskMessage(task)
-	celeryTask.Kwargs = args
-	return cc.delay(celeryTask)
-}
-
-func (cc *CeleryClient) delay(task *TaskMessage) (*AsyncResult, error) {
-	defer releaseTaskMessage(task)
-	encodedMessage, err := task.Encode()
+	if args != nil {
+		celeryTask.Args = args
+	}
+	for _, opt := range options {
+		opt(celeryTask, celeryMessage)
+	}
+	encodedMessage, err := celeryTask.Encode()
 	if err != nil {
 		return nil, err
 	}
-	celeryMessage := getCeleryMessage(encodedMessage)
-	defer releaseCeleryMessage(celeryMessage)
+	celeryMessage.Body = encodedMessage
+
 	err = cc.broker.SendCeleryMessage(celeryMessage)
 	if err != nil {
 		return nil, err
 	}
 	return &AsyncResult{
-		TaskID:  task.ID,
+		TaskID:  celeryTask.ID,
 		backend: cc.backend,
 	}, nil
 }

@@ -7,7 +7,7 @@ package gocelery
 import (
 	"encoding/base64"
 	"encoding/json"
-	"log"
+	"fmt"
 	"sync"
 	"time"
 
@@ -24,11 +24,37 @@ type CeleryMessage struct {
 }
 
 func (cm *CeleryMessage) reset() {
-	cm.Headers = nil
 	cm.Body = ""
 	cm.Properties.CorrelationID = uuid.Must(uuid.NewV4()).String()
 	cm.Properties.ReplyTo = uuid.Must(uuid.NewV4()).String()
 	cm.Properties.DeliveryTag = uuid.Must(uuid.NewV4()).String()
+	cm.Properties.DeliveryInfo = CeleryDeliveryInfo{
+		RoutingKey: "celery",
+		Exchange:   "celery",
+	}
+}
+
+type Option func(*TaskMessage, *CeleryMessage)
+
+func WithKwArgs(kwargs map[string]interface{}) Option {
+	return func(tm *TaskMessage, cm *CeleryMessage) {
+		tm.Kwargs = kwargs
+	}
+}
+
+func WithExpires(dur time.Duration) Option {
+	return func(tm *TaskMessage, cm *CeleryMessage) {
+		e := time.Now().Add(dur)
+		tm.Expires = &e
+		cm.Properties.Expiration = fmt.Sprintf("%d", dur.Milliseconds())
+	}
+}
+
+func WithQueue(q string) Option {
+	return func(tm *TaskMessage, cm *CeleryMessage) {
+		cm.Properties.DeliveryInfo.RoutingKey = q
+		cm.Properties.DeliveryInfo.Exchange = q
+	}
 }
 
 var celeryMessagePool = sync.Pool{
@@ -44,7 +70,6 @@ var celeryMessagePool = sync.Pool{
 				CorrelationID: uuid.Must(uuid.NewV4()).String(),
 				ReplyTo:       uuid.Must(uuid.NewV4()).String(),
 				DeliveryInfo: CeleryDeliveryInfo{
-					Priority:   0,
 					RoutingKey: "celery",
 					Exchange:   "celery",
 				},
@@ -56,9 +81,8 @@ var celeryMessagePool = sync.Pool{
 	},
 }
 
-func getCeleryMessage(encodedTaskMessage string) *CeleryMessage {
+func getCeleryMessage() *CeleryMessage {
 	msg := celeryMessagePool.Get().(*CeleryMessage)
-	msg.Body = encodedTaskMessage
 	return msg
 }
 
@@ -70,7 +94,7 @@ func releaseCeleryMessage(v *CeleryMessage) {
 // CeleryProperties represents properties json
 type CeleryProperties struct {
 	Priority      int                `json:"priority"`
-	Expiration    string             `json:"expiration"`
+	Expiration    string             `json:"expiration,omitempty"`
 	BodyEncoding  string             `json:"body_encoding"`
 	CorrelationID string             `json:"correlation_id"`
 	ReplyTo       string             `json:"reply_to"`
@@ -81,35 +105,8 @@ type CeleryProperties struct {
 
 // CeleryDeliveryInfo represents deliveryinfo json
 type CeleryDeliveryInfo struct {
-	Priority   int    `json:"priority"`
 	RoutingKey string `json:"routing_key"`
 	Exchange   string `json:"exchange"`
-}
-
-// GetTaskMessage retrieve and decode task messages from broker
-func (cm *CeleryMessage) GetTaskMessage() *TaskMessage {
-	// ensure content-type is 'application/json'
-	if cm.ContentType != "application/json" {
-		log.Println("unsupported content type " + cm.ContentType)
-		return nil
-	}
-	// ensure body encoding is base64
-	if cm.Properties.BodyEncoding != "base64" {
-		log.Println("unsupported body encoding " + cm.Properties.BodyEncoding)
-		return nil
-	}
-	// ensure content encoding is utf-8
-	if cm.ContentEncoding != "utf-8" {
-		log.Println("unsupported encoding " + cm.ContentEncoding)
-		return nil
-	}
-	// decode body
-	taskMessage, err := DecodeTaskMessage(cm.Body)
-	if err != nil {
-		log.Println("failed to decode task message")
-		return nil
-	}
-	return taskMessage
 }
 
 // TaskMessage is celery-compatible message
@@ -138,6 +135,7 @@ var taskMessagePool = sync.Pool{
 			Retries: 0,
 			Kwargs:  nil,
 			ETA:     &eta,
+			Expires: nil,
 		}
 	},
 }
