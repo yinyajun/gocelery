@@ -5,64 +5,57 @@
 package gocelery
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/redis/go-redis/v9"
 	"time"
-
-	"github.com/gomodule/redigo/redis"
 )
 
 // RedisCeleryBackend is celery backend for redis
 type RedisCeleryBackend struct {
-	*redis.Pool
+	Client redis.UniversalClient
 }
 
 // NewRedisBackend creates new RedisCeleryBackend with given redis pool.
 // RedisCeleryBackend can be initialized manually as well.
-func NewRedisBackend(conn *redis.Pool) *RedisCeleryBackend {
+func NewRedisBackend(c redis.UniversalClient) *RedisCeleryBackend {
 	return &RedisCeleryBackend{
-		Pool: conn,
+		Client: c,
 	}
 }
 
 // GetResult queries redis backend to get asynchronous result
-func (cb *RedisCeleryBackend) GetResult(taskID string) (*ResultMessage, error) {
-	conn := cb.Get()
-	defer conn.Close()
-	val, err := conn.Do("GET", fmt.Sprintf("celery-task-meta-%s", taskID))
+func (cb *RedisCeleryBackend) GetResult(ctx context.Context, taskID string) (*ResultMessage, error) {
+	val, err := cb.Client.Get(ctx, fmt.Sprintf("celery-task-meta-%s", taskID)).Result()
 	if err != nil {
 		return nil, err
 	}
-	if val == nil {
-		return nil, fmt.Errorf("result not available")
-	}
-	var resultMessage ResultMessage
-	err = json.Unmarshal(val.([]byte), &resultMessage)
+	var r ResultMessage
+	err = json.Unmarshal([]byte(val), &r)
 	if err != nil {
 		return nil, err
 	}
-	return &resultMessage, nil
+	return &r, nil
 }
 
-func (cb *RedisCeleryBackend) WaitForResult(taskID string, timeout time.Duration) (*ResultMessage, error) {
-	conn := cb.Get()
-	defer conn.Close()
-
-	c := redis.PubSubConn{Conn: conn}
-	c.Subscribe(fmt.Sprintf("celery-task-meta-%s", taskID))
+func (cb *RedisCeleryBackend) WaitForResult(ctx context.Context, taskID string, timeout time.Duration) (*ResultMessage, error) {
+	pubsub := cb.Client.Subscribe(ctx, fmt.Sprintf("celery-task-meta-%s", taskID))
+	defer pubsub.Close()
 
 	for {
-		val := c.ReceiveWithTimeout(timeout)
-		switch val.(type) {
-		case error:
-			return nil, val.(error)
-		case redis.Message:
-			msg := val.(redis.Message)
-			var resultMessage ResultMessage
-			if err := json.Unmarshal(msg.Data, &resultMessage); err != nil {
+		msg, err := pubsub.ReceiveTimeout(ctx, timeout)
+		if err != nil {
+			return nil, err
+		}
+
+		switch msg := msg.(type) {
+		case *redis.Message:
+			var r ResultMessage
+			if err := json.Unmarshal([]byte(msg.Payload), &r); err != nil {
 				return nil, err
 			}
-			return &resultMessage, nil
+			return &r, nil
 		}
 	}
 }

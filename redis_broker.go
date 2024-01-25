@@ -5,33 +5,33 @@
 package gocelery
 
 import (
+	"context"
 	"encoding/json"
-	"github.com/gomodule/redigo/redis"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // RedisCeleryBroker is celery broker for redis
 type RedisCeleryBroker struct {
-	*redis.Pool
+	Client redis.UniversalClient
 }
 
 // NewRedisBroker creates new RedisCeleryBroker with given redis connection pool
-func NewRedisBroker(conn *redis.Pool) *RedisCeleryBroker {
+func NewRedisBroker(c redis.UniversalClient) *RedisCeleryBroker {
 	return &RedisCeleryBroker{
-		Pool: conn,
+		Client: c,
 	}
 }
 
 // SendCeleryMessage sends CeleryMessage to redis queue
-func (cb *RedisCeleryBroker) SendCeleryMessage(message *CeleryMessage) error {
+func (cb *RedisCeleryBroker) SendCeleryMessage(ctx context.Context, message *CeleryMessage) error {
 	queue := message.Properties.DeliveryInfo.RoutingKey
 	jsonBytes, err := json.Marshal(message)
 	if err != nil {
 		return err
 	}
-	conn := cb.Get()
-	defer conn.Close()
-	_, err = conn.Do("LPUSH", queue, jsonBytes)
-	if err != nil {
+
+	if err = cb.Client.LPush(ctx, queue, jsonBytes).Err(); err != nil {
 		return err
 	}
 	return nil

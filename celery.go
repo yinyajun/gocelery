@@ -5,6 +5,7 @@
 package gocelery
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -17,13 +18,13 @@ type CeleryClient struct {
 
 // CeleryBroker is interface for celery broker database
 type CeleryBroker interface {
-	SendCeleryMessage(*CeleryMessage) error
+	SendCeleryMessage(context.Context, *CeleryMessage) error
 }
 
 // CeleryBackend is interface for celery backend database
 type CeleryBackend interface {
-	GetResult(string) (*ResultMessage, error)
-	WaitForResult(string, time.Duration) (*ResultMessage, error)
+	GetResult(context.Context, string) (*ResultMessage, error)
+	WaitForResult(context.Context, string, time.Duration) (*ResultMessage, error)
 }
 
 // NewCeleryClient creates new celery client
@@ -34,7 +35,8 @@ func NewCeleryClient(broker CeleryBroker, backend CeleryBackend) (*CeleryClient,
 	}, nil
 }
 
-func (cc *CeleryClient) ApplyAsync(task string,
+func (cc *CeleryClient) ApplyAsync(
+	task string,
 	args []interface{},
 	options ...Option,
 ) (*AsyncResult, error) {
@@ -55,7 +57,8 @@ func (cc *CeleryClient) ApplyAsync(task string,
 	}
 	celeryMessage.Body = encodedMessage
 
-	err = cc.broker.SendCeleryMessage(celeryMessage)
+	ctx := context.Background()
+	err = cc.broker.SendCeleryMessage(ctx, celeryMessage)
 	if err != nil {
 		return nil, err
 	}
@@ -86,10 +89,12 @@ type AsyncResult struct {
 }
 
 func (ar *AsyncResult) Get(timeout time.Duration) (interface{}, error) {
+	ctx := context.Background()
+
 	if ar.result != nil {
 		return ar.result.Result, nil
 	}
-	val, err := ar.backend.WaitForResult(ar.TaskID, timeout)
+	val, err := ar.backend.WaitForResult(ctx, ar.TaskID, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -105,10 +110,11 @@ func (ar *AsyncResult) Get(timeout time.Duration) (interface{}, error) {
 
 // AsyncGet gets actual result from backend and returns nil if not available
 func (ar *AsyncResult) AsyncGet() (interface{}, error) {
+	ctx := context.Background()
 	if ar.result != nil {
 		return ar.result.Result, nil
 	}
-	val, err := ar.backend.GetResult(ar.TaskID)
+	val, err := ar.backend.GetResult(ctx, ar.TaskID)
 	if err != nil {
 		return nil, err
 	}
@@ -124,10 +130,11 @@ func (ar *AsyncResult) AsyncGet() (interface{}, error) {
 
 // Ready checks if actual result is ready
 func (ar *AsyncResult) Ready() (bool, error) {
+	ctx := context.Background()
 	if ar.result != nil {
 		return true, nil
 	}
-	val, err := ar.backend.GetResult(ar.TaskID)
+	val, err := ar.backend.GetResult(ctx, ar.TaskID)
 	if err != nil {
 		return false, err
 	}
